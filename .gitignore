@@ -127,3 +127,9 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+examples/ExampleNN
+examples/MnistNN
+intuitus_commands
+intuitus_converter/.vscode
+parameters
+torch_yolo/weights

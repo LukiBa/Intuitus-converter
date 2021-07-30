@@ -1,0 +1,124 @@
+{
+  "Name": "Intuitus",
+  "Version": 0.2,
+  "PU Mode" : "float8",
+  "Command Interpreter": {
+    "Sequence" : {
+      "00"  : "op_mode",        
+      "01"  : "stride",         
+      "02"  : "tile_height",         
+      "03"  : "tile_width",     
+      "04"  : "first_channel",
+      "05"  : "last_channel",
+      "06"  : "padding",        
+      "07"  : "iterations",     
+      "09"  : "tile_recurrence",
+      "10"  : "use_bias",
+      "11"  : "max_pooling",
+      "12"  : "scattered_lines"
+    },
+    "Bit widths" : {
+      "op_mode"         : 3,
+      "stride"          : 1,
+      "tile_height"     : 6,
+      "tile_width"      : 6,
+      "first_channel"   : 1,
+      "last_channel"    : 1,
+      "padding"         : 4,
+      "iterations"      : 4,
+      "tile_recurrence" : 2,
+      "use_bias"        : 1,
+      "max_pooling"     : 1,
+      "scattered_lines" : 1
+    },
+    "Description" : {
+      "op_mode"         : "Operation mode: Defines what to do with the received data.", 
+      "stride"          : "Stride for convolution operation.",  
+      "tile_height"     : "Defines the height of a feature map tile. Must be smaller than the maximum systolic array line number.", 
+      "tile_width"      : "Defines the width of a feature map tile. Must be smaller than the maximum tile size. Zero corresponds to a tile width of 1!. Range 1 to 32.",  
+      "first_channel"   : "If 0 the results are stored in an empty cache tile. If 1 the results are summed to the previously computed tile.",
+      "last_channel"    : "If 1 ReLU is applied to the output",
+      "padding"         : "Defines the padding of the current tile. (0) : Upper padding, (1) left padding, (2) right padding, (3) lower padding.", 
+      "iterations"      : "Defines how many iterations the tile is used. Ensure that the number of weight blocks fits to this value.", 
+      "tile_recurrence" : "Indicates that the L2 cache is splited into 2 or 4 Tiles which use the same data, but different weights. This is usefull if the tile height is much smaller than the available line number. In this case 2 or 4 times more output channels can be computet in parallel. Example: line number = 36 and the input height is 9. The goal of this is to increase the hardware utilization.",
+      "use_bias"        : "Indicates if bias is used.",
+      "max_pooling"     : "Max pooling 2d with pool size = (2,2) and stride =(2,2)",
+      "scattered_lines" : "Indicates if scatter list includes lines or tiles"
+    },
+    "Possible values" : {
+      "op_mode"         : {"Conv1x1" : 0, "InvBottleneck3x3" : 1, "InvBottleneck5x5" : 2, "Conv3x3" : 3,"Conv5x5" : 4, "Residual" : 5}, 
+      "stride"          : {"1" : 0 , "2" : 1},  
+      "tile_height"     : "Range 0:63", 
+      "tile_width"      : "Range 1:64",  
+      "first_channel"   : {"False" : 0, "True" : 1}, 
+      "last_channel"    : {"False" : 0, "True" : 1}, 
+      "padding"         : {"Bit 0" : "Upper padding", "Bit 1" : "Left padding", "Bit 2" : "Right padding", "Bit 3" : "Lower padding"}, 
+      "iterations"      : "Range 0:15", 
+      "tile_recurrence" : {"00" : "No tile recurrence, Default", "01" : "data is used 2 times in parallel", "10" : "data is used 4 times in parallel"},
+      "use_bias"        : {"0" : "No Bias used", "1" : "Bias used"},
+      "max_pooling"     : {"0" : "No max pooling", "1" : "Max pooling"},
+      "scattered_lines" : {"0" : "Scatter list includes tiles", "1" : "Scatter list includes lines"}
+    }    
+  },
+  "Weight command interpreter": {
+    "Sequence" : {
+      "0" : "weight_address",
+      "1" : "reset_weight_cache",
+      "2" : "new_weights",
+      "3" : "weight_length",
+      "4" : "use_bias",
+      "5" : "bias_length", 
+      "6" : "tile_recurrence"
+    },
+    "Bit widths" : {
+      "weight_address"      : 10,
+      "reset_weight_cache"  : 1,
+      "new_weights"         : 1,
+      "weight_length"       : 9,
+      "use_bias"            : 1,
+      "bias_length"         : 7,
+      "tile_recurrence"     : 2 
+    },
+    "Description" : {
+      "weight_address"      : "Tile number in which the weight block is stored.",
+      "reset_weight_cache"  : "Rest weight cache tile. Has to be done before ",
+      "new_weights"         : "Indicates if weight block is sent or if the weights are already in the local memory",
+      "weight_length"       : "Length of the weight block. Min block size is 4.",
+      "use_bias"            : "Indicates if bias is used.",    
+      "bias_length"         : "Length of bias block. Should be the same as output channel number of corresponding load.",
+      "tile_recurrence"     : "Indicates that the L2 cache is splited into 2 or 4 Tiles which use the same data, but different weights. This is usefull if the tile height is much smaller than the available line number. In this case 2 or 4 times more output channels can be computet in parallel. Example: line number = 36 and the input height is 9. The goal of this is to increase the hardware utilization."
+    },
+    "Possible values" : {
+      "weight_address"      : "Range 0:2047",
+      "reset_weight_cache"  : "1 to reset weight cache.",
+      "new_weights"         : {"0" : "Weights and Bias in local memory", "1" : "Weight block of length weight_length and and optional bias block will be received."},
+      "weight_length"       : "Range 1:1024",
+      "use_bias"            : {"0" : "No Bias used", "1" : "Bias used"},
+      "bias_length"         : "Range 1:256",
+      "tile_recurrence"   : {"00" : "No tile recurrence, Default", "01" : "data is used 2 times in parallel", "10" : "data is used 4 times in parallel"}
+    }
+  },
+  "Quantization" : {
+    "BIAS_WIDTH"                : 4,
+    "BIAS_EXPONENT"             : 3,
+    "ACTIVATION_MANTISSA_WIDTH" : 4,
+    "ACTIVATION_EXPONENT_WIDTH" : 4,
+    "WEIGHT_MANTISSA_WIDTH"     : 4,
+    "WEIGHT_EXPONENT_WIDTH"     : 1
+  },
+  "Zero value" : "0x70",
+  "Systolic array structure" : {
+    "PE_HEIGHT"             : 3,
+    "SYST_ARRAY_WIDTH"      : 16,
+    "SYST_ARRAY_HEIGHT"     : 12,
+    "COLLECTOR_NBR"         : 2,
+    "WEIGHT_BRAM_NBR"       : 3,
+    "WEIGHT_BRAM_WIDTH"     : 32
+  },
+  "Cache sizes" : {
+    "PE cache size" : 512,
+    "Weight cache block size" : 1024, 
+    "Weight cache tile size" : 512, 
+    "Output FIFO buffer size" : "None" 
+  }
+}

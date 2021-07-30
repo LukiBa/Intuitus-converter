@@ -93,8 +93,7 @@ def _create_parser():
     parser.add_argument('--s', type=float, default=0.001, help='scale sparse rate')
     parser.add_argument('--prune', type=int, default=-1,
                         help='0:nomal prune or regular prune 1:shortcut prune 2:layer prune')
-    parser.add_argument('--quantized', type=int, default=1,
-                        help='0:quantization way one Ternarized weight and 8bit activation')
+    parser.add_argument('--quantized', type=int, default=1,help='0:float32, 1:int8 quantization, 2: int8 with fused scale shifts (postscale)')
     parser.add_argument('--a_bit', type=int, default=8,help='a-bit')
     parser.add_argument('--w_bit', type=int, default=6,help='w-bit')
     parser.add_argument('--FPGA', type=bool, default=False)

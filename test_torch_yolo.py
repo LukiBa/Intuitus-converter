@@ -13,28 +13,30 @@ import torch
 import torch.utils
 
 torch.set_default_dtype(torch.float32)
-DEVICE = 'cpu'
+DEVICE = 'cuda:0'
 
 def _create_parser():
     parser = argparse.ArgumentParser(prog='test.py')
     parser.add_argument('--model', type=str, default=None, help='model path')
-    parser.add_argument('--cfg', type=str, default='torch_yolo/cfg/yolov3tiny/yolov3-tiny-quant.cfg', help='*.cfg path')
-    parser.add_argument('--data', type=str, default='torch_yolo/data/coco2017_val_split.data', help='*.data path')
-    parser.add_argument('--weights', type=str, default='torch_yolo/weights/rt_best.pt', help='weights path')
-    parser.add_argument('--batch-size', type=int, default=1, help='size of each image batch')
+    parser.add_argument('--cfg', type=str, default='torch_yolo/cfg/yolov3tiny/yolov3-tiny.cfg', help='*.cfg path')
+    parser.add_argument('--data', type=str, default='torch_yolo/data/coco2017.data', help='*.data path')
+    parser.add_argument('--wdir', type=str, default='./weights', help='weight directory')
+    parser.add_argument('--weights', type=str, default='yolov3-tiny.weights', help='weights path')
+    parser.add_argument('--batch-size', type=int, default=32, help='size of each image batch')
     parser.add_argument('--img-size', type=int, default=416, help='inference size (pixels)')
-    parser.add_argument('--conf-thres', type=float, default=0.1, help='object confidence threshold')
+    parser.add_argument('--conf-thres', type=float, default=0.001, help='object confidence threshold')
     parser.add_argument('--iou-thres', type=float, default=0.6, help='IOU threshold for NMS')
-    parser.add_argument('--img_outpath', type=str, default='./detect_imgs', help='Path to output images. If set to None images are not saved.') #'./detect_imgs'
+    parser.add_argument('--img_outpath', type=str, default=None, help='Path to output images. If set to None images are not saved.') #'./detect_imgs'
     parser.add_argument('--save-json', action='store_true', help='save a cocoapi-compatible JSON results file')
     parser.add_argument('--task', default='test', help="'test', 'study', 'benchmark'")
     parser.add_argument('--device', default='', help='device id (i.e. 0 or 0,1) or cpu')
     parser.add_argument('--single-cls', action='store_true', help='train as single-class dataset')
     parser.add_argument('--augment', action='store_true', help='augmented inference')
-    parser.add_argument('--quantized', type=int, default=1,help='0:quantization way one Ternarized weight and 8bit activation')
+    parser.add_argument('--quantized', type=int, default=0,help='0:quantization way one Ternarized weight and 8bit activation')
     parser.add_argument('--a_bit', type=int, default=8, help='a-bit')
     parser.add_argument('--w_bit', type=int, default=6, help='w-bit')
     parser.add_argument('--FPGA', type=bool, default=False)#action='store_true', help='FPGA')
+    parser.add_argument('--plot_qerr_hist', type=bool, default=True)#action='store_true', help='FPGA')
     parser.add_argument('--load_model', type=str, default=None, help='load model instead of weights')
     return parser.parse_args()    
 
@@ -57,7 +59,8 @@ def test(cfg,
          FPGA=False,
          rank=None,
          img_outpath=None,
-         load_model=None):
+         load_model=None,
+         plot_qerr_hist=False):
     
     torch.cuda.empty_cache()
     # Initialize/load model and set device
@@ -71,7 +74,7 @@ def test(cfg,
 
         # Initialize model
         model = Darknet(cfg, imgsz, quantized=quantized, a_bit=a_bit, w_bit=w_bit,
-                        FPGA=FPGA)
+                        FPGA=FPGA, plot_qerr_hist=plot_qerr_hist)
 
         if FPGA:
             dev = 'cpu'
@@ -91,7 +94,8 @@ def test(cfg,
                         if '.0.0.' in name:
                             new_name = name.replace('.0.0.','.0.Conv2d.')
                             
-                        elif '.0.' in name and not 'Conv2d' in name and not 'BatchNorm2d' in name:
+                        elif '.0.' in name and not 'Conv2d' in name and not 'BatchNorm2d' in name \
+                            and not 'total_ops' in name and not 'total_params' in name:
                             new_name = name.replace('.0.','.Conv2d.')
                         else:
                             new_name = name  
@@ -336,12 +340,14 @@ if __name__ == '__main__':
         model = torch.load(opt.model)
 
     print(opt)
+    weights = str(pathlib.Path(opt.wdir).absolute() / opt.weights)
+
 
     # task = 'test', 'study', 'benchmark'
     if opt.task == 'test':  # (default) test normally
         results, maps = test(opt.cfg,
              opt.data,
-             opt.weights,
+             weights,
              opt.batch_size,
              opt.img_size,
              opt.conf_thres,
@@ -355,7 +361,8 @@ if __name__ == '__main__':
              w_bit=opt.w_bit,
              FPGA=opt.FPGA,
              img_outpath = opt.img_outpath,
-             load_model = opt.load_model)
+             load_model = opt.load_model,
+             plot_qerr_hist = opt.plot_qerr_hist)
         
         s = ('P','R','mAP@0.5','F1')
         print('%10s' * 4 % s + '\n')

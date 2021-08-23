@@ -34,13 +34,10 @@ spec.loader.exec_module(test_py)
 
 from datetime import datetime
 
-DEVICE = 'cpu'
+DEVICE = 'cuda:0'
 
 #torch.autograd.set_detect_anomaly(True)
-wdir = 'weights' + os.sep  # weights dir
-last = wdir + 'last.pt'
-best = wdir + 'best.pt'
-results_file = 'results.txt'
+
 
 # Hyperparameters
 hyp = {'giou': 1.0,  # giou loss gain
@@ -64,11 +61,12 @@ hyp = {'giou': 1.0,  # giou loss gain
 
 def _create_parser():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--epochs', type=int, default=150)  # 500200 batches at bs 16, 117263 COCO images = 273 epochs
-    parser.add_argument('--batch-size', type=int, default=4)  # effective bs = batch_size * accumulate = 16 * 4 = 64
-    parser.add_argument('--cfg', type=str, default='torch_yolo/cfg/yolov3tiny/yolov3-tiny-quant.cfg', help='*.cfg path')
+    parser.add_argument('--epochs', type=int, default=10)  # 500200 batches at bs 16, 117263 COCO images = 273 epochs
+    parser.add_argument('--batch-size', type=int, default=32)  # effective bs = batch_size * accumulate = 16 * 4 = 64
+    parser.add_argument('--cfg', type=str, default='torch_yolo/cfg/yolov3tiny/yolov3-tiny.cfg', help='*.cfg path')
     parser.add_argument('--t_cfg', type=str, default=None, help='teacher model cfg file path for knowledge distillation')
-    parser.add_argument('--weights', type=str, default='torch_yolo/weights/rt_best.pt', help='initial weights path')
+    parser.add_argument('--wdir', type=str, default='./weights', help='weight directory')
+    parser.add_argument('--weights', type=str, default='yolov3-tiny.weights', help='initial weights path')
     parser.add_argument('--t_weights', type=str, default=None, help='teacher model weights')    
     parser.add_argument('--data', type=str, default='torch_yolo/data/coco2017_val_split.data', help='*.data path') # _val_split
     parser.add_argument('--multi-scale', action='store_true', help='adjust (67%% - 150%%) img_size every 10 batches')
@@ -93,7 +91,7 @@ def _create_parser():
     parser.add_argument('--s', type=float, default=0.001, help='scale sparse rate')
     parser.add_argument('--prune', type=int, default=-1,
                         help='0:nomal prune or regular prune 1:shortcut prune 2:layer prune')
-    parser.add_argument('--quantized', type=int, default=1,help='0:float32, 1:int8 quantization, 2: int8 with fused scale shifts (postscale)')
+    parser.add_argument('--quantized', type=int, default=0,help='0:float32, 1:int8 quantization, 2: int8 with fused scale shifts (postscale)')
     parser.add_argument('--a_bit', type=int, default=8,help='a-bit')
     parser.add_argument('--w_bit', type=int, default=6,help='w-bit')
     parser.add_argument('--FPGA', type=bool, default=False)
@@ -126,7 +124,12 @@ def train(hyp,opt):
     epochs = opt.epochs  # 500200 batches at bs 64, 117263 images = 273 epochs
     batch_size = opt.batch_size
     accumulate = max(round(64 / batch_size), 1)  # accumulate n times before optimizer update (bs 64)
-    weights = opt.weights  # initial training weights
+
+    wdir = pathlib.Path(opt.wdir).absolute()
+    last = str(wdir / 'last.pt')
+    best = str(wdir / 'best.pt')
+    results_file = 'results.txt'     
+    weights = str(wdir / opt.weights)  # initial training weights
 
     t_weights = opt.t_weights  # teacher model weights
     imgsz_min, imgsz_max, imgsz_test = opt.img_size  # img sizes (min, max, test)
@@ -155,22 +158,6 @@ def train(hyp,opt):
     # Remove previous results
     for f in glob.glob('*_batch*.jpg') + glob.glob(results_file):
         os.remove(f)
-
-    # DDP  init
-    # if opt.local_rank != -1:
-    #     if opt.local_rank == 0:
-    #         print("--------------using ddp---------------")
-    #     assert torch.cuda.device_count() > opt.local_rank
-    #     torch.cuda.set_device(opt.local_rank)
-    #     dist.init_process_group(backend='nccl', init_method='env://')  # distributed backend
-
-    #     assert opt.batch_size % opt.world_size == 0, '--batch-size must be multiple of CUDA device count'
-    #     opt.batch_size = opt.batch_size // opt.world_size
-    # else:
-    #     dist.init_process_group(backend='nccl',  # 'distributed backend'
-    #                             init_method="file:///d:/tmp/some_file",  # distributed training init method
-    #                             world_size=1,  # number of nodes for distributed training
-    #                             rank=0)  # distributed training node rank
 
     # Initialize model
     steps = math.ceil(len(open(train_path).readlines()) / batch_size) * epochs
@@ -216,28 +203,22 @@ def train(hyp,opt):
         if weights.endswith('.pt'):  # pytorch format
             # possible weights are '*.pt', 'yolov3-spp.pt', 'yolov3-tiny.pt' etc.
             chkpt = torch.load(weights, map_location=device)
-
             # load model
             if opt.load_model != None:
                 model =  torch.load(opt.load_model)
-                
             else:           
-                
                 try:
-                    
-                    if True:
-                        weight_dict = {}
-                        for name in chkpt['model'].keys():
-                            if '.0.0.' in name:
-                                new_name = name.replace('.0.0.','.0.Conv2d.')
-                                
-                            elif '.0.' in name and not 'Conv2d' in name and not 'BatchNorm2d' in name:
-                                new_name = name.replace('.0.','.Conv2d.')
-                            else:
-                                new_name = name  
-                            weight_dict[new_name] = chkpt['model'][name]
-                    else:
-                        weight_dict = chkpt['model']
+                    weight_dict = {}
+                    for name in chkpt['model'].keys():
+                        if '.0.0.' in name:
+                            new_name = name.replace('.0.0.','.0.Conv2d.')
+                            
+                        elif '.0.' in name and not 'Conv2d' in name and not 'BatchNorm2d' in name\
+                        and not 'total_ops' in name and not 'total_params' in name:
+                            new_name = name.replace('.0.','.Conv2d.')
+                        else:
+                            new_name = name  
+                        weight_dict[new_name] = chkpt['model'][name]
                     
                     chkpt['model'] = {k: v for k, v in weight_dict.items() if model.state_dict()[k].numel() == v.numel()}
                     model.load_state_dict(weight_dict, strict=False)
@@ -288,29 +269,6 @@ def train(hyp,opt):
     scheduler.last_epoch = start_epoch - 1  # see link below
     # https://discuss.pytorch.org/t/a-problem-occured-when-resuming-an-optimizer/28822
 
-    # # Plot lr schedule
-    # y = []
-    # for _ in range(epochs):
-    #     scheduler.step()
-    #     y.append(optimizer.param_groups[0]['lr'])
-    # plt.plot(y, '.-', label='LambdaLR')
-    # plt.xlabel('epoch')
-    # plt.ylabel('LR')
-    # plt.tight_layout()
-    # plt.savefig('LR.png', dpi=300)
-
-    # Initialize distributed training
-    # if opt.local_rank != -1:
-    #     model = DDP(model, device_ids=[opt.local_rank], output_device=opt.local_rank, find_unused_parameters=True)
-    # else:
-    #     model = torch.nn.parallel.DistributedDataParallel(model, find_unused_parameters=True)
-
-    # yolo_layers= []
-    # for layer in model.modules():
-    #     if isinstance(layer, YOLOLayer):
-    #         yolo_layers.append(layer)
-    # model.yolo_layers = yolo_layers  # move yolo layer indices to top level
-
     # Dataset
     dataset = LoadImagesAndLabels2(train_path, img_size, batch_size,
                                   augment=True,
@@ -324,8 +282,6 @@ def train(hyp,opt):
                                   #rect=True,
                                   cache_images=opt.cache_images,
                                   single_cls=opt.single_cls)
-    
-#    test = dataset[0]
 
     # Get the layer to be pruned
     if hasattr(model, 'module'):
@@ -355,36 +311,16 @@ def train(hyp,opt):
 
     # Dataloader
     batch_size = min(batch_size, len(dataset))
-    nw = 1
-    # train_sampler = torch.utils.data.distributed.DistributedSampler(dataset)  # ddp sampler
-    # test_sampler = torch.utils.data.distributed.DistributedSampler(testset)
-    # nw = min([os.cpu_count(), batch_size if batch_size > 1 else 0, 8])  # number of workers
-    # dataloader = torch.utils.data.DataLoader(dataset,
-    #                                          batch_size=int(batch_size / opt.world_size),
-    #                                          num_workers=nw,
-    #                                          shuffle=False if (opt.local_rank != -1) else not opt.rect,
-    #                                          pin_memory=True,
-    #                                          collate_fn=dataset.collate_fn,
-    #                                          sampler=train_sampler if (opt.local_rank != -1) else None
-    #
-    # testloader = torch.utils.data.DataLoader(LoadImagesAndLabels(test_path, imgsz_test, batch_size,
-    #                                                              hyp=hyp,
-    #                                                              rect=True,
-    #                                                              cache_images=opt.cache_images,
-    #                                                              single_cls=opt.single_cls),
-    #                                          batch_size=batch_size,
-    #                                          num_workers=nw,
-    #                                          pin_memory=True,
-    #                                          collate_fn=dataset.collate_fn)                                          )
+    nw = min([os.cpu_count(), batch_size if batch_size > 1 else 0, 8])  # number of workers
     dataloader = torch.utils.data.DataLoader(dataset,
                                             batch_size=batch_size,
-                                            num_workers=2,
+                                            num_workers=nw,
                                             pin_memory=True,
                                             collate_fn=dataset.collate_fn)    
     # Testloader
     testloader = torch.utils.data.DataLoader(testset,
                                             batch_size=batch_size,
-                                            num_workers=2,
+                                            num_workers=nw,
                                             pin_memory=True,
                                             collate_fn=dataset.collate_fn)  
                     
@@ -428,7 +364,6 @@ def train(hyp,opt):
             dataloader.sampler.set_epoch(epoch)  # DDP set seed
         # gridmask.set_prob(epoch, max_epoch)
         model.train()
-        # 稀疏化标志
         if opt.prune == -1:
             sr_flag = False
         else:

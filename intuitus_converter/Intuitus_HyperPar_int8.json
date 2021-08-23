@@ -34,11 +34,11 @@
       "stride"          : "Stride for convolution operation.",  
       "tile_height"     : "Defines the height of a feature map tile. Must be smaller than the maximum systolic array line number.", 
       "tile_width"      : "Defines the width of a feature map tile. Must be smaller than the maximum tile size. Zero corresponds to a tile width of 1!. Range 1 to 32.",  
-      "first_channel"   : "If 0 the results are stored in an empty cache tile. If 1 the results are summed to the previously computed tile.",
-      "last_channel"    : "If 1 ReLU is applied to the output",
+      "first_channel"   : "Indicates that the computation of a new output tile starts. The results are stored in an empty cache tile.",
+      "last_channel"    : "Indicates that the computation of an output tile is done with the completion of this tile. ReLU is applied and the data transferred to the external memory.",
       "padding"         : "Defines the padding of the current tile. (0) : Upper padding, (1) left padding, (2) right padding, (3) lower padding.", 
       "iterations"      : "Defines how many iterations the tile is used. Ensure that the number of weight blocks fits to this value.", 
-      "tile_recurrence" : "Indicates that the L2 cache is splited into 2 or 4 Tiles which use the same data, but different weights. This is usefull if the tile height is much smaller than the available line number. In this case 2 or 4 times more output channels can be computet in parallel. Example: line number = 36 and the input height is 9. The goal of this is to increase the hardware utilization.",
+      "tile_recurrence" : "Indicates that the PEs are splited into 2 or 4 which use the same data, but different weights. This is usefull if the tile height is much smaller than the available line number. In this case 2 or 4 times more output channels can be computet in parallel. Example: line number = 36 and the input height is 9. The goal of this is to increase the hardware utilization.",
       "max_pooling"     : "Max pooling 2d with pool size = (2,2) and stride =(2,2)",
       "scattered_lines" : "Indicates if scatter list includes lines or tiles"
     },
@@ -76,13 +76,13 @@
       "new_layer_settings"      : 1 
     },
     "Description" : {
-      "weight_address"          : "Tile number in which the weight block is stored.",
+      "weight_address"          : "Weight cache destination address.",
       "reset_weight_cache"      : "Rest weight cache tile. Has to be done before ",
       "new_weights"             : "Indicates if weight block is sent or if the weights are already in the local memory",
-      "weight_length"           : "Length of the weight block. Min block size is 4.",
-      "bias_length"             : "Length of bias block. Should be the same as output channel number of corresponding load.",
-      "tile_recurrence"         : "Indicates that the L2 cache is splited into 2 or 4 Tiles which use the same data, but different weights. This is usefull if the tile height is much smaller than the available line number. In this case 2 or 4 times more output channels can be computet in parallel. Example: line number = 36 and the input height is 9. The goal of this is to increase the hardware utilization.",
-      "new_layer_settings"      : "Determines wether new output shift vector is included in command block. Not supported by float8 implementation"
+      "weight_length"           : "Length of the weight block in 32 bit vectors",
+      "bias_length"             : "Length of the bias block in 32 bit vectors.",
+      "tile_recurrence"         : "Indicates that the PEs are splited into 2 or 4 which use the same data, but different weights. This is usefull if the tile height is much smaller than the available line number. In this case 2 or 4 times more output channels can be computet in parallel. Example: line number = 36 and the input height is 9. The goal of this is to increase the hardware utilization.",
+      "new_layer_settings"      : "Determines whether new output shift vector is included in command block. Not supported by float8 implementation"
     },
     "Possible values" : {
       "weight_address"          : "Range 0:2047",

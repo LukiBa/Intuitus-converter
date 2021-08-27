@@ -134,3 +134,4 @@ intuitus_converter/.vscode
 parameters
 torch_yolo/weights
 runs
+weights

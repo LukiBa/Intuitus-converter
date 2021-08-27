@@ -539,8 +539,10 @@ def train(hyp,opt):
             now = datetime.now()
             #model.set_layer_norm()
             #model.fuse_layer_norm()
-            dt_string = now.strftime("%d-%m-%Y_%H-%M-%S")
-            save_model_name =  'pt_models/'+dt_string+'.pt'
+            model_save_path = pathlib.Path('./pt_models').absolute()
+            model_save_path.mkdir(parents=True, exist_ok=True)
+            dt_string = now.strftime("%d-%m-%Y_%H-%M-%S") +'.pt'
+            save_model_name =  str(model_save_path / dt_string)
             torch.save(model, save_model_name)       
             
             is_coco = any([x in data for x in ['coco.data', 'coco2014.data', 'coco2017.data']]) and model.nc == 80

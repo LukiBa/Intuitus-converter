@@ -1,4 +1,0 @@
-classes= 20
-train=data/DIOR-full/train.txt
-valid=data/DIOR-full/test.txt
-names=data/dior.names

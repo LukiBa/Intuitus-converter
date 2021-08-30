@@ -20,44 +20,44 @@ import tensorflow as tf
 
 from intuitus_converter.core import float8,float6,MACC_slim,float12,fixed4
 import intuitus_converter.misc.util.optain_dataset as load 
-import IntuitusExtension as C_impl
+#import IntuitusExtension as C_impl
 
 
 
-def call_numpy (in_tensor,kernel,bias=None, stride = 1):
-    in_tensor = np.array(in_tensor)
-    kernel = np.array(kernel)
-    weights = float6(kernel)
-    if type(bias) != None:
-        bias = np.array(bias)
-        bias_7q7 = np.int16(np.around(2**(8-1)*bias))
-    else:
-        bias_7q7 = np.zeros(kernel.shape[-1],dtype=np.int16)
-    tensor_fl8 = float8(in_tensor)
-    print("Conv 2d tensor {}, kernel {}".format(in_tensor.shape,kernel.shape))
-    z_exp, z =  C_impl.conv2d_DSP_sim(tensor_fl8.exp,tensor_fl8.mantissa,weights.sign,weights.exp,weights.mantissa,bias_7q7,stride)
-    return float8(z_exp,z).to_float32()
+# def call_numpy (in_tensor,kernel,bias=None, stride = 1):
+#     in_tensor = np.array(in_tensor)
+#     kernel = np.array(kernel)
+#     weights = float6(kernel)
+#     if type(bias) != None:
+#         bias = np.array(bias)
+#         bias_7q7 = np.int16(np.around(2**(8-1)*bias))
+#     else:
+#         bias_7q7 = np.zeros(kernel.shape[-1],dtype=np.int16)
+#     tensor_fl8 = float8(in_tensor)
+#     print("Conv 2d tensor {}, kernel {}".format(in_tensor.shape,kernel.shape))
+#     z_exp, z =  C_impl.conv2d_DSP_sim(tensor_fl8.exp,tensor_fl8.mantissa,weights.sign,weights.exp,weights.mantissa,bias_7q7,stride)
+#     return float8(z_exp,z).to_float32()
 
-def call_numpy_slow(in_tensor,kernel,bias=None,used_padding='same'): 
-    in_tensor = np.array(in_tensor)
-    kernel = np.array(kernel)
-    weights = float6(kernel)
-    if type(bias) != type(None):
-        bias_in = np.array(bias)
-    else:
-        bias_in = np.zeros(kernel.shape[-1],dtype=np.int16)
-    print("Slow: Conv 2d tensor {}, kernel {}".format(in_tensor.shape,kernel.shape))    
-    output_channels = MACC_slim(bias_in)
-    if used_padding == 'same':
-        tensor = np.zeros([in_tensor.shape[0],in_tensor.shape[1]+2,in_tensor.shape[2]+2,in_tensor.shape[3]])
-    tensor[:,1:-1,1:-1,:] = in_tensor  
-    tensor_fl8 = float8(tensor)
-    for k in range(kernel.shape[0]):
-        for l in range(kernel.shape[1]):
-            for m in range(in_tensor.shape[-1]):
-                    output_channels(tensor_fl8[:,k:tensor.shape[1]-kernel.shape[0]+1+k,l:tensor.shape[2]-kernel.shape[1]+1+l,:],weights[k,l,m,:])  
-    print("Done..")
-    return np.where(output_channels.to_float32()< 0.0,0.0,output_channels.to_float32())
+# def call_numpy_slow(in_tensor,kernel,bias=None,used_padding='same'): 
+#     in_tensor = np.array(in_tensor)
+#     kernel = np.array(kernel)
+#     weights = float6(kernel)
+#     if type(bias) != type(None):
+#         bias_in = np.array(bias)
+#     else:
+#         bias_in = np.zeros(kernel.shape[-1],dtype=np.int16)
+#     print("Slow: Conv 2d tensor {}, kernel {}".format(in_tensor.shape,kernel.shape))    
+#     output_channels = MACC_slim(bias_in)
+#     if used_padding == 'same':
+#         tensor = np.zeros([in_tensor.shape[0],in_tensor.shape[1]+2,in_tensor.shape[2]+2,in_tensor.shape[3]])
+#     tensor[:,1:-1,1:-1,:] = in_tensor  
+#     tensor_fl8 = float8(tensor)
+#     for k in range(kernel.shape[0]):
+#         for l in range(kernel.shape[1]):
+#             for m in range(in_tensor.shape[-1]):
+#                     output_channels(tensor_fl8[:,k:tensor.shape[1]-kernel.shape[0]+1+k,l:tensor.shape[2]-kernel.shape[1]+1+l,:],weights[k,l,m,:])  
+#     print("Done..")
+#     return np.where(output_channels.to_float32()< 0.0,0.0,output_channels.to_float32())
 
 @keras_export('keras.layers.Conv2D_fl8')     
 class Conv2D_fl8(layers.Conv2D): 
@@ -138,72 +138,28 @@ class Conv2D_fl8(layers.Conv2D):
     def __call__(self, *args, **kwargs):
          return super().__call__(*args, **kwargs)
     
-    def call(self, inputs):
-        # Check if the input_shape in call() is different from that in build().
-        # If they are different, recreate the _convolution_op to avoid the stateful
-        # behavior.
-        # call_input_shape = inputs.get_shape()
-        # recreate_conv_op = (
-        #     call_input_shape[1:] != self._build_conv_op_input_shape[1:])
-    
-        # if recreate_conv_op:
-        #     self._convolution_op = nn_ops.Convolution(
-        #         call_input_shape,
-        #         filter_shape=self.kernel.shape,
-        #         dilation_rate=self.dilation_rate,
-        #         strides=self.strides,
-        #         padding=self._padding_op,
-        #         data_format=self._conv_op_data_format)
-    
-        # # Apply causal padding to inputs for Conv1D.
-        # if self.padding == 'causal' and self.__class__.__name__ == 'Conv1D':
-        #     inputs = array_ops.pad(inputs, self._compute_causal_padding())
-            
-        # exps, mantissas = self.quantize_ufl8(inputs)
-        # inputs_fl8 = self.ufl8_to_fl16(exps, mantissas)
-        # k_signs, k_exps, k_mantissas = self.quantize_fl6(self.kernel)
-        # kernels_fl6 = self.fl6_to_fl16(k_signs, k_exps, k_mantissas)
-        
-        # outputs = self._convolution_op(inputs_fl8, kernels_fl6)
-    
-        # if self.use_bias:
-        #   if self.data_format == 'channels_first':
-        #     if self.rank == 1:
-        #       # nn.bias_add does not accept a 1D input tensor.
-        #       bias = array_ops.reshape(self.bias, (1, self.filters, 1))
-        #       outputs += bias
-        #     else:
-        #       outputs = nn.bias_add(outputs, self.bias, data_format='NCHW')
-        #   else:
-        #     outputs = nn.bias_add(outputs, self.bias, data_format='NHWC')
-    
-        # if self.activation is not None:
-        #   return self.activation(outputs)
-        # return outputs        
-        
-        
-        
-        if self.data_format == 'channels_first':
-            raise NotImplementedError("Channels first not implemented")
-        call_input_shape = inputs.get_shape()
-        recreate_conv_op = (
-            call_input_shape[1:] != self._build_conv_op_input_shape[1:])
+    # def call(self, inputs):
+    #     if self.data_format == 'channels_first':
+    #         raise NotImplementedError("Channels first not implemented")
+    #     call_input_shape = inputs.get_shape()
+    #     recreate_conv_op = (
+    #         call_input_shape[1:] != self._build_conv_op_input_shape[1:])
           
-        if recreate_conv_op:
-          self._convolution_op = nn_ops.Convolution(
-              call_input_shape,
-              filter_shape=self.kernel.shape,
-              dilation_rate=self.dilation_rate,
-              strides=self.strides,
-              padding=self._padding_op,
-              data_format=self._conv_op_data_format)
+    #     if recreate_conv_op:
+    #       self._convolution_op = nn_ops.Convolution(
+    #           call_input_shape,
+    #           filter_shape=self.kernel.shape,
+    #           dilation_rate=self.dilation_rate,
+    #           strides=self.strides,
+    #           padding=self._padding_op,
+    #           data_format=self._conv_op_data_format)
           
-        # Apply causal padding to inputs for Conv1D.
-        if self.padding == 'causal' and self.__class__.__name__ == 'Conv1D':
-          inputs = array_ops.pad(inputs, self._compute_causal_padding())
+    #     # Apply causal padding to inputs for Conv1D.
+    #     if self.padding == 'causal' and self.__class__.__name__ == 'Conv1D':
+    #       inputs = array_ops.pad(inputs, self._compute_causal_padding())
         
-        outputs = tf.numpy_function(call_numpy, [inputs,self.kernel,self.bias] ,tf.float16)
-        return outputs
+    #     outputs = tf.numpy_function(call_numpy, [inputs,self.kernel,self.bias] ,tf.float16)
+    #     return outputs
             
     def sim_hw(self,in_tensor): 
         weight_list = self.get_weights()

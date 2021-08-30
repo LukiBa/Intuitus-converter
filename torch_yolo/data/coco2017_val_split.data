@@ -1,5 +1,0 @@
-classes=80
-train=C:/Users/BaischerL.LARSYSHB/Documents/Datasets/coco/val_split_train.txt
-valid=C:/Users/BaischerL.LARSYSHB/Documents/Datasets/coco/val_split_val.txt
-names=C:/Users/BaischerL.LARSYSHB/Documents/Datasets/coco/coco.names
-instances=C:/Users/BaischerL.LARSYSHB/Documents/Datasets/coco/annotations/instances_val2017.json

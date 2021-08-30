@@ -1,5 +1,0 @@
-classes=80
-train=C:/Users/BaischerL.LARSYSHB/Documents/Datasets/coco/train2017.txt
-valid=C:/Users/BaischerL.LARSYSHB/Documents/Datasets/coco/val2017.txt
-names=C:/Users/BaischerL.LARSYSHB/Documents/Datasets/coco/coco.names
-instances=C:/Users/BaischerL.LARSYSHB/Documents/Datasets/coco/annotations/instances_val2017.json

@@ -136,3 +136,8 @@ torch_yolo/weights
 runs
 weights
 torch_yolo/data
+pt_models
+train_sample
+results.json
+results.png
+results.txt

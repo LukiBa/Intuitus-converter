@@ -133,3 +133,6 @@ intuitus_commands
 intuitus_converter/.vscode
 parameters
 torch_yolo/weights
+detect_imgs
+weights
+results.json

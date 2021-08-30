@@ -136,6 +136,9 @@ torch_yolo/weights
 runs
 weights
 torch_yolo/data
+detect_imgs
+weights
+results.json
 pt_models
 train_sample
 results.json

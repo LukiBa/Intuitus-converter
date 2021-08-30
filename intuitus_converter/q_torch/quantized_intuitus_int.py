@@ -3,6 +3,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Function
 
+import matplotlib.pyplot as plt
+
 
 # ********************* range_trackers *********************
 class RangeTracker(nn.Module):
@@ -280,11 +282,6 @@ class QuantizedConv2d(nn.Conv2d):
 
     def forward(self, input):
         if self.training:
-            # q_bias = self.bias
-            # bias_shift = self.b_bits-self.bias.abs().max().log2().ceil()
-            # q_bias = q_bias << bias_shift
-            # q_bias = Round.apply(q_bias)  
-            # q_bias = q_bias >> bias_shift  
             q_bias = self.bias_quantizer(self.bias)
             
             if input.shape[1] != 3:
@@ -302,12 +299,7 @@ class QuantizedConv2d(nn.Conv2d):
                 groups=self.groups
             )
             return output
-        else:            
-            # q_bias = self.bias
-            # bias_shift = self.b_bits-self.bias.abs().max().log2().ceil()
-            # q_bias = q_bias << bias_shift
-            # q_bias = Round.apply(q_bias)  
-            # q_bias = q_bias >> bias_shift
+        else:  # Just to show that conv2d is done using "integers" --> same results as in training mode     
             q_bias = self.bias_quantizer(self.bias)            
             
             if input.shape[1] != 3:
@@ -558,8 +550,8 @@ class QuantizedConv2d_post_shift(nn.Conv2d):
         if output.abs().max().log2().ceil() > 15.0:
             print('Overflow')
 
-        output = output >> self.activation_shift
-        output = output = torch.floor(output)
+        output >>= self.activation_shift
+        output = torch.floor(output)
         output = torch.clamp(output, self.a_min_val, self.a_max_val)           
         return output     
 
@@ -578,7 +570,8 @@ class QuantizedConv2d_post_shift_fpga(nn.Conv2d):
             w_bits=8,
             b_bits=6,
             interchannel_width = 12,
-            intrachannel_width = 15
+            intrachannel_width = 15,
+            plot_qerr_hist = False
             ):
         super().__init__(
             in_channels=in_channels,
@@ -608,6 +601,8 @@ class QuantizedConv2d_post_shift_fpga(nn.Conv2d):
         self.b_max_val = torch.tensor((1 << (self.b_bits - 1)) - 1, requires_grad=False)
         self.w_min_val = torch.tensor(-(1 << (self.w_bits - 1))+1, requires_grad=False)
         self.w_max_val = torch.tensor((1 << (self.w_bits - 1))-1, requires_grad=False)
+        
+        self.plot_qerr_hist = plot_qerr_hist
 
     def round(self, input):
         output = Round.apply(input)
@@ -631,45 +626,46 @@ class QuantizedConv2d_post_shift_fpga(nn.Conv2d):
         interchannel_shift = 3-(self.intrachannel_width-self.a_bits-self.activation_shift)
         interchannel_shift = torch.clamp(interchannel_shift,0,4)
         
-        # for i in range(input.shape[1]):
-        #     if i == 0:
-        #         interim = F.conv2d(
-        #             input=input[:,i:i+1,...],
-        #             weight=q_weight[:,i:i+1,...],
-        #             bias=q_bias,
-        #             stride=self.stride,
-        #             padding=self.padding,
-        #             dilation=self.dilation,
-        #             groups=self.groups
-        #         )
-        #         output = interim
-        #     else:
-        #         interim = F.conv2d(
-        #             input=input[:,i:i+1,...],
-        #             weight=q_weight[:,i:i+1,...],
-        #             bias=None,
-        #             stride=self.stride,
-        #             padding=self.padding,
-        #             dilation=self.dilation,
-        #             groups=self.groups
-        #         )                    
-        #         output += interim  
-        #     # if output.abs().max().log2().ceil() > (self.intrachannel_width-1.0):
-        #     #     print('Overflow')
-        #     output = output >> interchannel_shift
-        #     output = torch.floor(output)
-        #     output = torch.clamp(output,-1.0*2.0**(self.interchannel_width-1.0), 2.0**(self.interchannel_width-1.0)-1.0)
-        #     output = output << interchannel_shift
+        for i in range(input.shape[1]):
+            if i == 0:
+                interim = F.conv2d(
+                    input=input[:,i:i+1,...],
+                    weight=q_weight[:,i:i+1,...],
+                    bias=q_bias,
+                    stride=self.stride,
+                    padding=self.padding,
+                    dilation=self.dilation,
+                    groups=self.groups
+                )
+                output = interim
+            else:
+                interim = F.conv2d(
+                    input=input[:,i:i+1,...],
+                    weight=q_weight[:,i:i+1,...],
+                    bias=None,
+                    stride=self.stride,
+                    padding=self.padding,
+                    dilation=self.dilation,
+                    groups=self.groups
+                )                    
+                output += interim  
+            # if output.abs().max().log2().ceil() > (self.intrachannel_width-1.0):
+            #     print('Overflow')
+            output = output >> interchannel_shift
+            output = torch.floor(output)
+            output = torch.clamp(output,-1.0*2.0**(self.interchannel_width-1.0), 2.0**(self.interchannel_width-1.0)-1.0)
+            output = output << interchannel_shift
                 
         
-        output = self._quantized_conv2d(input,q_weight,q_bias,interchannel_shift,stride=self.stride,padding=self.padding)
+        #output = self._quantized_conv2d(input,q_weight,q_bias,interchannel_shift,stride=self.stride,padding=self.padding)
         
-        # if input.shape[1] == 3:  
-        #     output = output >> self.activation_shift-1
-        # else: 
         output = output >> self.activation_shift
         output = torch.floor(output)
-        output = torch.clamp(output, self.a_min_val, self.a_max_val)   
+        output = torch.clamp(output, self.a_min_val, self.a_max_val) 
+        
+        if self.plot_qerr_hist == True:
+            self.plot_qerr_histogram(input, output)
+            
         return output
 
     def _quantized_conv2d(self,input,weight,bias,interchannel_shift,stride=(1,1),padding=(1,1)):
@@ -713,6 +709,46 @@ class QuantizedConv2d_post_shift_fpga(nn.Conv2d):
           
         #print("Overflows: {}".format(overflows))
         return output
+    
+    def plot_qerr_histogram(self,input,int_output): 
+        q_bias = self.bias
+        q_bias = q_bias << self.bias_quant_shift
+        q_bias = self.round(q_bias)
+        q_bias = torch.clamp(q_bias,self.b_min_val,self.b_max_val)  
+        q_bias = q_bias << (self.weight_shift+self.bias_shift-self.bias_quant_shift)           
+       
+        
+        q_weight = self.weight << self.weight_shift
+        q_weight = self.round(q_weight)
+        q_weight = torch.clamp(q_weight, self.w_min_val, self.w_max_val)    
+        
+        qw_output = F.conv2d(
+            input=input,
+            weight=q_weight,
+            bias=q_bias,
+            stride=self.stride,
+            padding=self.padding,
+            dilation=self.dilation,
+            groups=self.groups
+        )
+        qw_output = qw_output >> self.activation_shift
+        qw_output = torch.floor(qw_output)
+        qw_output = torch.clamp(qw_output, self.a_min_val, self.a_max_val)   
+
+        # compute differences 
+        quant_error_qw = (int_output-qw_output).abs() *(100.0/127.0)
+        quant_error_qw = quant_error_qw.cpu().data.numpy()        
+        
+        # plot histograms
+        _ = plt.hist(quant_error_qw.ravel(), bins = 16, color = 'blue', alpha = 0.5)
+        
+        
+        _ = plt.xlabel('FPGA computation error in %')
+        _ = plt.ylabel('Count')
+        #_ = plt.legend(['quantized computation error', 'FPGA to Original'])
+        plt.show()
+        return quant_error_qw.max(), quant_error_qw.mean()
+        
 
 def reshape_to_activation(input):
     return input.reshape(1, -1, 1, 1)

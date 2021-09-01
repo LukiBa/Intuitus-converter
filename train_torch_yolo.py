@@ -7,6 +7,7 @@ import torch.distributed as dist
 import torch.optim as optim
 import torch.optim.lr_scheduler as lr_scheduler
 from torch.utils.tensorboard import SummaryWriter
+from torchsummary import summary
 
 #from utils.prune_utils import *
 import math
@@ -62,11 +63,11 @@ hyp = {'giou': 1.0,  # giou loss gain
 def _create_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument('--epochs', type=int, default=10)  # 500200 batches at bs 16, 117263 COCO images = 273 epochs
-    parser.add_argument('--batch-size', type=int, default=32)  # effective bs = batch_size * accumulate = 16 * 4 = 64
-    parser.add_argument('--cfg', type=str, default='torch_yolo/cfg/yolov3tiny/yolov3-tiny.cfg', help='*.cfg path')
+    parser.add_argument('--batch-size', type=int, default=4)  # effective bs = batch_size * accumulate = 16 * 4 = 64
+    parser.add_argument('--cfg', type=str, default='torch_yolo/cfg/yolov3tiny/yolov3-tiny-quant.cfg', help='*.cfg path')
     parser.add_argument('--t_cfg', type=str, default=None, help='teacher model cfg file path for knowledge distillation')
     parser.add_argument('--wdir', type=str, default='./weights', help='weight directory')
-    parser.add_argument('--weights', type=str, default='yolov3-tiny.weights', help='initial weights path')
+    parser.add_argument('--weights', type=str, default='last.pt', help='initial weights path')
     parser.add_argument('--t_weights', type=str, default=None, help='teacher model weights')    
     parser.add_argument('--data', type=str, default='torch_yolo/data/coco2017_val_split.data', help='*.data path') # _val_split
     parser.add_argument('--multi-scale', action='store_true', help='adjust (67%% - 150%%) img_size every 10 batches')
@@ -91,7 +92,7 @@ def _create_parser():
     parser.add_argument('--s', type=float, default=0.001, help='scale sparse rate')
     parser.add_argument('--prune', type=int, default=-1,
                         help='0:nomal prune or regular prune 1:shortcut prune 2:layer prune')
-    parser.add_argument('--quantized', type=int, default=0,help='0:float32, 1:int8 quantization, 2: int8 with fused scale shifts (postscale)')
+    parser.add_argument('--quantized', type=int, default=1,help='0:float32, 1: quantize weight only, 2:int8 quantization, 3: int8 with fused scale shifts (postscale)')
     parser.add_argument('--a_bit', type=int, default=8,help='a-bit')
     parser.add_argument('--w_bit', type=int, default=6,help='w-bit')
     parser.add_argument('--FPGA', type=bool, default=False)
@@ -107,7 +108,7 @@ def _create_parser():
 
 # Overwrite hyp with hyp*.txt (optional)
 f = glob.glob('hyp*.txt')
-if f:
+if f
     print('Using %s' % f[0])
     for k, v in zip(hyp.keys(), np.loadtxt(f[0])):
         hyp[k] = v
@@ -357,6 +358,8 @@ def train(hyp,opt):
     if opt.mpt:
         cuda = device.type != 'cpu'
         scaler = amp.GradScaler(enabled=cuda)
+
+    #summary(model,(3,416,416))
         
     for epoch in range(start_epoch, epochs):  # epoch ------------------------------------------------------------------
         model.to(DEVICE)
@@ -471,7 +474,6 @@ def train(hyp,opt):
                 scaler.scale(loss).backward()
             else:
                 loss.backward()
-            # 对要剪枝层的γ参数稀疏化
             if hasattr(model, 'module'):
                 if opt.prune != -1:
                     BNOptimizer.updateBN(sr_flag, model.module.module_list, opt.s, prune_idx)

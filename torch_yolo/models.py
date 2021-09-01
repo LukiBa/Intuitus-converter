@@ -65,6 +65,31 @@ def create_modules(module_defs, img_size, cfg, quantized, quantizer_output, a_bi
 
             pad = (kernel_size - 1) // 2 if int(mdef['pad']) else 0
             if quantized == 1:
+                modules.add_module('Conv2d', q_int.QuantizedConv2d_WeightOnly(in_channels=output_filters[-1],
+                                                                   out_channels=filters,
+                                                                   kernel_size=kernel_size,
+                                                                   stride=int(mdef['stride']),
+                                                                   padding=pad,
+                                                                   groups=mdef['groups'] if 'groups' in mdef else 1,
+                                                                   bias=not bn,
+                                                                   a_bits=a_bit,
+                                                                   w_bits=w_bit))
+                if bn:
+                    modules.add_module('BatchNorm2d', nn.BatchNorm2d(filters, momentum=0.1))
+
+                if mdef['activation'] == 'leaky':
+                    modules.add_module('activation', nn.LeakyReLU(0.1, inplace=True))
+                if mdef['activation'] == 'relu6':
+                    modules.add_module('activation', ReLU6())
+                if mdef['activation'] == 'h_swish':
+                    modules.add_module('activation', HardSwish())
+                if mdef['activation'] == 'relu':
+                    modules.add_module('activation', nn.ReLU(inplace=True))
+                if mdef['activation'] == 'mish':
+                    modules.add_module('activation', Mish())   
+                #if mdef['activation'] == 'linear':
+                #    modules.add_module('result_scale', q_int.IntuitusReslult_shift())#q_int.IntuitusResult_Linear(bias=False))              
+            elif quantized == 2:
                 if FPGA:
                     modules.add_module('Conv2d', q_int.QuantizedConv2d_fpga(in_channels=output_filters[-1],
                                                                             out_channels=filters,
@@ -102,7 +127,7 @@ def create_modules(module_defs, img_size, cfg, quantized, quantizer_output, a_bi
                     modules.add_module('activation', Mish())   
                 #if mdef['activation'] == 'linear':
                 #    modules.add_module('result_scale', q_int.IntuitusReslult_shift())#q_int.IntuitusResult_Linear(bias=False))                       
-            elif quantized == 2:
+            elif quantized == 3:
                 if FPGA:
                     modules.add_module('Conv2d', q_int.QuantizedConv2d_post_shift_fpga(in_channels=output_filters[-1],
                                                                             out_channels=filters,

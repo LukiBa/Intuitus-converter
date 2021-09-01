@@ -239,6 +239,61 @@ class Bias_Quantizer(nn.Module):
         output = output >> (self.a_bits)
         return output
 
+class QuantizedConv2d_WeightOnly(nn.Conv2d):
+    def __init__(
+            self,
+            in_channels,
+            out_channels,
+            kernel_size,
+            stride=1,
+            padding=0,
+            dilation=1,
+            groups=1,
+            bias=True,
+            a_bits=8,
+            w_bits=8,
+            b_bits=6):
+        super().__init__(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+            dilation=dilation,
+            groups=groups,
+            bias=bias
+        )
+        self.a_bits = a_bits
+        self.w_bits = w_bits  
+        self.b_bits = b_bits
+        
+        self.activation_quantizer = SymmetricQuantizer(bits=a_bits,
+                                                       range_tracker=AveragedRangeTracker(q_level='L',out_channels=-1),
+                                                       out_channels=-1, FPGA=False,log2_scale=True,floor=True)            
+            
+        self.weight_quantizer = SymmetricQuantizer(bits=w_bits, 
+                                                   range_tracker=GlobalRangeTracker(q_level='L',out_channels=-1),
+                                                   out_channels=-1, FPGA=False,log2_scale=True,comp2=False)
+
+        self.bias_quantizer = SymmetricQuantizer(bits=b_bits, 
+                                                   range_tracker=GlobalRangeTracker(q_level='L',out_channels=-1),
+                                                   out_channels=-1, FPGA=False,log2_scale=True)
+
+
+    def forward(self, input):         
+        q_weight = self.weight_quantizer(self.weight)
+
+        output = F.conv2d(
+            input=input,
+            weight=q_weight,
+            bias=self.bias,
+            stride=self.stride,
+            padding=self.padding,
+            dilation=self.dilation,
+            groups=self.groups
+        )
+        return output
+
 class QuantizedConv2d(nn.Conv2d):
     def __init__(
             self,

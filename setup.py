@@ -21,6 +21,6 @@ setup(name='intuitus_converter',
           '': ['*.txt', '*.rst', '*.i', '*.c', '*.h', '*.json', '*.tcl', '*.vhd'],
       },
       test_requires=['numpy', 'wget', 'pathlib', 'json', 'bitstring', 'setuptools', 'argparse', 'typing', 'scikit-learn', 'terminaltables',\
-                    'idx2numpy', 'pandas', 'brewer2mpl', 'tensorflow>=2.1', 'torch>=1.8', 'torchsummary', 'torchvision', 'matplotlib', 'tqdm', 'opencv-python>=4.4', 'easydict'],
+                    'idx2numpy', 'pandas', 'brewer2mpl', 'tensorflow==2.3', 'torch>=1.8', 'torchsummary', 'torchvision', 'matplotlib', 'tqdm', 'opencv-python>=4.4', 'easydict'],
       install_requires=['setuptools', 'numpy', 'wget', 'pathlib', 'bitstring', 'argparse', 'typing', 'scikit-learn', 'terminaltables',\
-                        'matplotlib', 'pandas', 'brewer2mpl','idx2numpy', 'tensorflow>=2.1', 'torch>=1.8', 'torchsummary', 'torchvision', 'tqdm', 'opencv-python>=4.4', 'easydict'])
+                        'matplotlib', 'pandas', 'brewer2mpl','idx2numpy', 'tensorflow==2.3', 'torch>=1.8', 'torchsummary', 'torchvision', 'tqdm', 'opencv-python>=4.4', 'easydict'])

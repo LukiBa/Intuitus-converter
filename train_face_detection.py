@@ -64,10 +64,10 @@ def _create_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument('--epochs', type=int, default=10)  # 500200 batches at bs 16, 117263 COCO images = 273 epochs
     parser.add_argument('--batch-size', type=int, default=4)  # effective bs = batch_size * accumulate = 16 * 4 = 64
-    parser.add_argument('--cfg', type=str, default='torch_yolo/cfg/yolov3tiny/yolov3-tiny.cfg', help='*.cfg path')
+    parser.add_argument('--cfg', type=str, default='torch_yolo/cfg/yolov3tiny-face/yolov3-tiny.cfg', help='*.cfg path')
     parser.add_argument('--t_cfg', type=str, default=None, help='teacher model cfg file path for knowledge distillation')
     parser.add_argument('--wdir', type=str, default='./weights', help='weight directory')
-    parser.add_argument('--weights', type=str, default='yolov3-tiny.weights', help='initial weights path')
+    parser.add_argument('--weights', type=str, default=None, help='initial weights path')
     parser.add_argument('--t_weights', type=str, default=None, help='teacher model weights')    
     parser.add_argument('--data', type=str, default='torch_yolo/data/vggface.data', help='*.data path') # _val_split
     parser.add_argument('--multi-scale', action='store_true', help='adjust (67%% - 150%%) img_size every 10 batches')
@@ -85,20 +85,19 @@ def _create_parser():
     parser.add_argument('--adam', action='store_true', help='use adam optimizer')
     parser.add_argument('--ema', action='store_true', help='use ema')
     parser.add_argument('--single-cls', action='store_true', help='train as single-class dataset')
-    parser.add_argument('--pretrain', '-pt', dest='pt', action='store_true',
-                        help='use pretrain model')
     parser.add_argument('--mixedprecision', '-mpt', dest='mpt', action='store_true',
                         help='use mixed precision training')
     parser.add_argument('--s', type=float, default=0.001, help='scale sparse rate')
     parser.add_argument('--prune', type=int, default=-1,
                         help='0:nomal prune or regular prune 1:shortcut prune 2:layer prune')
-    parser.add_argument('--quantized', type=int, default=-1,help='0:float32, 1: quantize weight only, 2:int8 quantization, 3: int8 with fused scale shifts (postscale)')
+    parser.add_argument('--quantized', type=int, default=0,help='0:float32, 1: quantize weight only, 2:int8 quantization, 3: int8 with fused scale shifts (postscale)')
     parser.add_argument('--a_bit', type=int, default=8,help='a-bit')
     parser.add_argument('--w_bit', type=int, default=6,help='w-bit')
     parser.add_argument('--FPGA', type=bool, default=False)
     parser.add_argument('--test_img_outpath', type=str, default=None, help='Path to output images. If set to None images are not saved.') #'./detect_imgs'
     parser.add_argument('--load_model', type=str, default=None, help='load saved model instead of weights') 
     parser.add_argument('--load_teacher_model', type=str, default=None, help='load saved model instead of weights for teacher')
+    parser.add_argument('--skip_weights_of_layers', type=list, default=[15,22], help='list of layers which should not use pretrained weights')
 
     # DDP get local-rank
     parser.add_argument('--rank', default=0, help='rank of current process')
@@ -130,8 +129,10 @@ def train(hyp,opt):
     last = str(wdir / 'last.pt')
     best = str(wdir / 'best.pt')
     results_file = 'results.txt'     
-    weights = str(wdir / opt.weights)  # initial training weights
-
+    if opt.weights != None:
+        weights = str(wdir / opt.weights)  # initial training weights
+    else:
+        weights = None
     t_weights = opt.t_weights  # teacher model weights
     imgsz_min, imgsz_max, imgsz_test = opt.img_size  # img sizes (min, max, test)
 
@@ -200,7 +201,7 @@ def train(hyp,opt):
     del pg0, pg1, pg2
 
     best_fitness = 0.0
-    if weights != 'None':
+    if weights != None:
         if weights.endswith('.pt'):  # pytorch format
             # possible weights are '*.pt', 'yolov3-spp.pt', 'yolov3-tiny.pt' etc.
             chkpt = torch.load(weights, map_location=device)
@@ -211,6 +212,13 @@ def train(hyp,opt):
                 try:
                     weight_dict = {}
                     for name in chkpt['model'].keys():
+                        skip = False
+                        for skip_layer in opt.skip_weights_of_layers:
+                            if ('.'+str(skip_layer)+'.') in name:
+                                skip = True
+                        if skip:
+                            continue
+                                
                         if '.0.0.' in name:
                             new_name = name.replace('.0.0.','.0.Conv2d.')
                             
@@ -359,8 +367,8 @@ def train(hyp,opt):
         cuda = device.type != 'cpu'
         scaler = amp.GradScaler(enabled=cuda)
 
-    #summary(model,(3,416,416))
-    print(model)
+    summary(model, input_size=(3, imgsz_test, imgsz_test))
+    #print(model)
         
     for epoch in range(start_epoch, epochs):  # epoch ------------------------------------------------------------------
         model.to(DEVICE)

@@ -433,6 +433,61 @@ def compute_loss(p, targets, model):  # predictions, targets, model
     loss = lbox + lobj + lcls
     return loss, torch.cat((lbox, lobj, lcls, loss)).detach()
 
+def compute_loss_face_desc(p, targets, model):  # predictions, targets, model
+    ft = torch.cuda.FloatTensor if p[0].is_cuda else torch.Tensor
+    ldesc, lbox, lobj = ft([0]), ft([0]), ft([0])
+    tdesc, tbox, indices, anchor_vec = build_targets_face_desc(p, targets, model)
+    h = model.hyp  # hyperparameters
+    red = 'mean'  # Loss reduction (sum or mean)
+
+    # Define criteria
+    BCEdesc = nn.BCEWithLogitsLoss(pos_weight=ft([h['desc_pw']]), reduction=red)
+    BCEobj = nn.BCEWithLogitsLoss(pos_weight=ft([h['obj_pw']]), reduction=red)
+
+    # focal loss
+    g = h['fl_gamma']  # focal loss gamma
+    if g > 0:
+        BCEdesc, BCEobj = FocalLoss(BCEdesc, g), FocalLoss(BCEobj, g)
+
+    # Compute losses
+    np, ng = 0, 0  # number grid points, targets
+    for i, pi in enumerate(p):  # layer index, layer predictions
+        b, a, gj, gi = indices[i]  # image, anchor, gridy, gridx
+        tobj = torch.zeros_like(pi[..., 0])  # target obj
+        np += tobj.numel()
+
+        # Compute losses
+        nb = len(b)
+        if nb:  # number of targets
+            ng += nb
+            ps = pi[b, a, gj, gi]  # prediction subset corresponding to targets
+            # ps[:, 2:4] = torch.sigmoid(ps[:, 2:4])  # wh power loss (uncomment)
+
+            # GIoU
+            pxy = torch.sigmoid(ps[:, 0:2])  # pxy = pxy * s - (s - 1) / 2,  s = 1.5  (scale_xy)
+            pwh = torch.exp(ps[:, 2:4]).clamp(max=1E3) * anchor_vec[i]
+            pbox = torch.cat((pxy, pwh), 1)  # predicted box
+            giou = bbox_iou(pbox.t(), tbox[i], x1y1x2y2=False, GIoU=True)  # giou computation
+            lbox += (1.0 - giou).sum() if red == 'sum' else (1.0 - giou).mean()  # giou loss
+            
+            tobj[b, a, gj, gi] = (1.0 - model.gr) + model.gr * giou.detach().clamp(0).type(tobj.dtype)  # giou ratio
+
+            ldesc += BCEdesc(ps[:, 5:],  tdesc[i])  # BCE
+
+        lobj += BCEobj(pi[..., 4], tobj)  # obj loss
+
+    lbox *= h['giou']
+    lobj *= h['obj']
+    ldesc *= h['desc']
+    if red == 'sum':
+        bs = tobj.shape[0]  # batch size
+        lobj *= 3 / (6300 * bs) * 2  # 3 / np * 2
+        if ng:
+            ldesc *= 3 / ng 
+            lbox *= 3 / ng
+
+    loss = lbox + lobj + ldesc
+    return loss, torch.cat((lbox, lobj, ldesc, loss)).detach()
 
 def compute_lost_KD(output_s, output_t, num_classes, batch_size):
     T = 3.0
@@ -780,6 +835,59 @@ def build_targets(p, targets, model):
 
     return tcls, tbox, indices, av
 
+def build_targets_face_desc(p, targets, model):
+    # targets = [image, class, x, y, w, h]
+
+    nt = targets.shape[0]
+    tdesc, tbox, indices, av = [], [], [], []
+    reject, use_all_anchors = True, True
+    gain = torch.ones(4, device=targets.device)  # normalized to gridspace gain
+
+    # m = list(model.modules())[-1]
+    # for i in range(m.nl):
+    #    anchors = m.anchors[i]
+    multi_gpu = type(model) in (nn.parallel.DataParallel, nn.parallel.DistributedDataParallel)
+    for i, j in enumerate(model.yolo_layers):
+        # get number of grid points and anchor vec for this yolo layer
+        anchors = model.module.module_list[j].anchor_vec if multi_gpu else model.module_list[j].anchor_vec
+
+        # iou of targets-anchors
+        gain = torch.tensor(p[i].shape, device=targets.device)[[3, 2, 3, 2]]  # xyxy gain
+        t = targets.clone()
+        t[:,1:5], a = targets[:,1:5] * gain, []
+        gwh = t[:, 3:5]
+        if nt:
+            iou = wh_iou(anchors, gwh)  # iou(3,n) = wh_iou(anchors(3,2), gwh(n,2))
+
+            if use_all_anchors:
+                na = anchors.shape[0]  # number of anchors
+                a = torch.arange(na,device=targets.device).view(-1, 1).repeat(1, nt).view(-1)
+                t = t.repeat(na, 1)
+            else:  # use best anchor only
+                iou, a = iou.max(0)  # best iou and anchor
+
+            # reject anchors below iou_thres (OPTIONAL, increases P, lowers R)
+            if reject:
+                j = iou.view(-1) > model.hyp['iou_t']  # iou threshold hyperparameter
+                t, a = t[j], a[j]
+
+        # Indices
+        b = t[:, 0].long().t()
+        gxy = t[:, 1:3]  # grid x, y
+        gwh = t[:, 3:5]  # grid w, h
+        gi, gj = gxy.long().t()  # grid x, y indices
+        indices.append((b, a, gj, gi))
+
+        # Box
+        gxy -= gxy.floor()  # xy
+        tbox.append(torch.cat((gxy, gwh), 1))  # xywh (grids)
+        av.append(anchors[a])  # anchor vec
+
+        # Class
+        tdesc.append(t[:,5:])
+
+    return tdesc, tbox, indices, av
+
 
 def non_max_suppression(prediction, conf_thres=0.1, iou_thres=0.6, multi_label=True, classes=None, agnostic=False):
     """
@@ -861,6 +969,72 @@ def non_max_suppression(prediction, conf_thres=0.1, iou_thres=0.6, multi_label=T
         output[xi] = x[i]
     return output
 
+def non_max_suppression_FaceDesc(prediction, conf_thres=0.1, iou_thres=0.6, multi_label=True, classes=None, agnostic=False):
+    """
+    Performs  Non-Maximum Suppression on inference results
+    Returns detections with shape:
+        nx6 (x1, y1, x2, y2, conf, cls)
+    """
+
+    # Box constraints
+    min_wh, max_wh = 2, 4096  # (pixels) minimum and maximum box width and height
+
+    method = 'merge'
+    nc = prediction[0].shape[1] - 5  # number of classes
+    multi_label &= nc > 1  # multiple labels per box
+    output = [None] * len(prediction)
+
+    for xi, x in enumerate(prediction):  # image index, image inference
+        # Apply conf constraint
+        x = x[x[:, 4] > conf_thres]
+
+        # Apply width-height constraint
+        x = x[((x[:, 2:4] > min_wh) & (x[:, 2:4] < max_wh)).all(1)]
+
+        # If none remain process next image
+        if not x.shape[0]:
+            continue
+
+        # Box (center x, center y, width, height) to (x1, y1, x2, y2)
+        box = xywh2xyxy(x[:, :4])
+
+        # Detections matrix nx6 (xyxy, conf, descriptor)
+        x[:,:4] = box
+
+        # Apply finite constraint
+        if not torch.isfinite(x).all():
+            x = x[torch.isfinite(x).all(1)]
+
+        # If none remain process next image
+        n = x.shape[0]  # number of boxes
+        if not n:
+            continue
+
+        # Sort by confidence
+        # if method == 'fast_batch':
+        #    x = x[x[:, 4].argsort(descending=True)]
+
+        # Batched NMS
+        boxes, scores = x[:, :4].clone(), x[:, 4]  # boxes (offset by class), scores
+        if method == 'merge':  # Merge NMS (boxes merged using weighted mean)
+            i = torchvision.ops.boxes.nms(boxes, scores, iou_thres)
+            if 1 < n < 3E3:  # update boxes as boxes(i,4) = weights(i,n) * boxes(n,4)
+                try:
+                    # weights = (box_iou(boxes, boxes).tril_() > iou_thres) * scores.view(-1, 1)  # box weights
+                    # weights /= weights.sum(0)  # normalize
+                    # x[:, :4] = torch.mm(weights.T, x[:, :4])
+                    weights = (box_iou(boxes[i], boxes) > iou_thres) * scores[None]  # box weights
+                    x[i, :4] = torch.mm(weights, x[:, :4]).float() / weights.sum(1, keepdim=True)  # merged boxes
+                except:  # possible CUDA error https://github.com/ultralytics/yolov3/issues/1139
+                    pass
+        elif method == 'vision':
+            i = torchvision.ops.boxes.nms(boxes, scores, iou_thres)
+        elif method == 'fast':  # FastNMS from https://github.com/dbolya/yolact
+            iou = box_iou(boxes, boxes).triu_(diagonal=1)  # upper triangular iou matrix
+            i = iou.max(0)[0] < iou_thres
+
+        output[xi] = x[i]
+    return output
 
 def get_yolo_layers(model):
     bool_vec = [x['type'] == 'yolo' for x in model.module_defs]

@@ -19,10 +19,10 @@ DEVICE = 'cuda:0'
 def _create_parser():
     parser = argparse.ArgumentParser(prog='test.py')
     parser.add_argument('--model', type=str, default=None, help='model path')
-    parser.add_argument('--cfg', type=str, default='torch_yolo/cfg/yolov3tiny/yolov3-tiny-quant.cfg', help='*.cfg path')
-    parser.add_argument('--data', type=str, default='torch_yolo/data/vggface.data', help='*.data path')
-    parser.add_argument('--wdir', type=str, default='./weights', help='weight directory')
-    parser.add_argument('--weights', type=str, default='post_scale.pt', help='weights path')
+    parser.add_argument('--cfg', type=str, default='torch_yolo/cfg/yolov3tiny-face-desc/yolov3-tiny.cfg', help='*.cfg path')
+    parser.add_argument('--data', type=str, default='torch_yolo/data/vggface-desc.data', help='*.data path')
+    parser.add_argument('--wdir', type=str, default='./weights_face', help='weight directory')
+    parser.add_argument('--weights', type=str, default='last.pt', help='weights path')
     parser.add_argument('--batch-size', type=int, default=8, help='size of each image batch')
     parser.add_argument('--img-size', type=int, default=416, help='inference size (pixels)')
     parser.add_argument('--conf-thres', type=float, default=0.001, help='object confidence threshold')
@@ -33,12 +33,12 @@ def _create_parser():
     parser.add_argument('--device', default='', help='device id (i.e. 0 or 0,1) or cpu')
     parser.add_argument('--single-cls', action='store_true', help='train as single-class dataset')
     parser.add_argument('--augment', action='store_true', help='augmented inference')
-    parser.add_argument('--quantized', type=int, default=-1,help='0:quantization way one Ternarized weight and 8bit activation')
+    parser.add_argument('--quantized', type=int, default=0,help='0:quantization way one Ternarized weight and 8bit activation')
     parser.add_argument('--a_bit', type=int, default=8, help='a-bit')
     parser.add_argument('--w_bit', type=int, default=6, help='w-bit')
     parser.add_argument('--FPGA', type=bool, default=False)#action='store_true', help='FPGA')
     parser.add_argument('--plot_qerr_hist', type=bool, default=True)#action='store_true', help='FPGA')
-    parser.add_argument('--load_model', type=str, default='pt_models/05-11-2021_10-55-25.pt', help='load model instead of weights')
+    parser.add_argument('--load_model', type=str, default='pt_models/09-11-2021_17-57-27.pt', help='load model instead of weights')
     return parser.parse_args()    
 
 def test(cfg,
@@ -119,8 +119,7 @@ def test(cfg,
 
         if device.type != 'cpu' and torch.cuda.device_count() > 1:
             model = nn.DataParallel(model)
-        #summary(model, input_size=(3, imgsz, imgsz))
-        print(model)
+        summary(model, input_size=(3, imgsz, imgsz))
     else:  # called by train.py
         device = next(model.parameters()).device  # get model device
         verbose = False
@@ -146,7 +145,7 @@ def test(cfg,
         
     # Dataloader
     if dataloader is None:
-        dataset = LoadImagesAndLabels2(path, imgsz, batch_size, single_cls=single_cls)
+        dataset = LoadImagesAndLabels_FaceDescriptor(path, imgsz, batch_size, single_cls=single_cls)
         test = dataset[0]
         batch_size = min(batch_size, len(dataset))
         dataloader = DataLoader(dataset,
@@ -189,18 +188,17 @@ def test(cfg,
 
             # Compute loss
             if hasattr(model, 'hyp'):  # if model has loss hyperparameters
-                loss += compute_loss(train_out, targets, model)[1][:3]  # GIoU, obj, cls
+                loss += compute_loss_face_desc(train_out, targets, model)[1][:3]  # GIoU, obj, cls
 
             # Run NMS
             t = torch_utils.time_synchronized()
-            output = non_max_suppression(inf_out, conf_thres=conf_thres, iou_thres=iou_thres, multi_label=multi_label)
+            output = non_max_suppression_FaceDesc(inf_out, conf_thres=conf_thres, iou_thres=iou_thres, multi_label=multi_label)
             t1 += torch_utils.time_synchronized() - t
 
         # Statistics per image
         for si, pred in enumerate(output):
             labels = targets[targets[:, 0] == si, 1:]
             nl = len(labels)
-            tcls = labels[:, 0].tolist() if nl else []  # target class
             seen += 1
 
             if pred is None:
@@ -215,57 +213,33 @@ def test(cfg,
             # Clip boxes to image bounds
             clip_coords(pred, (height, width))
 
-            # Append to pycocotools JSON dictionary
-            if save_json:
-                # [{"image_id": 42, "category_id": 18, "bbox": [258.15, 41.29, 348.26, 243.78], "score": 0.236}, ...
-                image_id = int(Path(paths[si]).stem.split('_')[-1])
-                box = pred[:, :4].clone()  # xyxy
-                scale_coords(imgs[si].shape[1:], box, shapes[si][0], shapes[si][1])  # to original shape
-                box = xyxy2xywh(box)  # xywh
-                box[:, :2] -= box[:, 2:] / 2  # xy center to top-left corner
-                for p, b in zip(pred.tolist(), box.tolist()):
-                    jdict.append({'image_id': image_id,
-                                  'category_id': coco91class[int(p[5])],
-                                  'bbox': [round(x, 3) for x in b],
-                                  'score': round(p[4], 5)})
-
             # Assign all predictions as incorrect
             correct = torch.zeros(pred.shape[0], niou, dtype=torch.bool, device=device)
             if nl:
                 detected = []  # target indices
-                tcls_tensor = labels[:, 0]
 
                 # target boxes
-                tbox = xywh2xyxy(labels[:, 1:5]) * whwh
+                tbox = xywh2xyxy(labels[:, 0:4]) * whwh
                 #tbox = xywh2xyxy(labels[:, 1:5])
                 #tbox = labels[:, 1:5]
                 
                 # Per target class
-                for cls in torch.unique(tcls_tensor):
-                    ti = (cls == tcls_tensor).nonzero(as_tuple=False).view(-1)  # prediction indices
-                    pi = (cls == pred[:, 5]).nonzero(as_tuple=False).view(-1)  # target indices
-
-                    # Search for detections
-                    if pi.shape[0]:
-                        # Prediction to target ious
-                        ious, i = box_iou(pred[pi, :4], tbox[ti]).max(1)  # best ious, indices
-
-                        # Append detections
-                        for j in (ious > iouv[0]).nonzero(as_tuple=False):
-                            d = ti[i[j]]  # detected target
-                            if d not in detected:
-                                detected.append(d)
-                                correct[pi[j]] = ious[j] > iouv  # iou_thres is 1xn
-                                if len(detected) == nl:  # all targets already located in image
-                                    break
-
+                target_cls = list(np.zeros(labels[:, 0:4].shape[0],np.int32))
+                ious, i = box_iou(pred[:, :4], tbox).max(1)  # best ious, indices
+                for j in (ious > iouv[0]).nonzero(as_tuple=False):
+                    d = i[j]
+                    correct[j] = ious[j] > iouv
+                    if d not in detected:
+                        detected.append(d)                        
+                        if len(detected) == nl:  # all targets already located in image
+                            break
             # Append statistics (correct, conf, pcls, tcls)
-            stats.append((correct.cpu(), pred[:, 4].cpu(), pred[:, 5].cpu(), tcls))
+            stats.append((correct.cpu(), pred[:, 4].cpu(), torch.zeros_like(pred[:,4]).cpu(), target_cls))
 
         # Plot images
         if img_outpath != None:#if batch_i < 1:
-            #f = 'test_batch%g_gt.jpg' % batch_i  # filename
-            #plot_images(imgs, targets, paths=paths, names=names, fname=str(img_gndpath/f))  # ground truth
+            f = 'test_batch%g_gt.jpg' % batch_i  # filename
+            plot_images(imgs, targets, paths=paths, names=names, fname=str(img_gndpath/f))  # ground truth
             f = 'test_batch%g_pred.jpg' % batch_i
             plot_images(imgs, output_to_target(output, width, height), paths=paths, names=names, fname=str(img_predpath/f))  # predictions
 

@@ -7,11 +7,12 @@ import intuitus_converter.q_torch.quantized_intuitus_int as q_int
 from intuitus_converter.q_torch.layers import *
 import intuitus_converter.q_torch.torch_utils as torch_utils
 import torch.nn as nn
-from collections import OrderedDict
 import copy
 import pathlib
 import shutil
 import numpy as np
+import torch
+import math
 
 ONNX_EXPORT = False
 
@@ -301,7 +302,31 @@ def create_modules(module_defs, img_size, cfg, quantized, quantizer_output, a_bi
                     module_list[j][0].bias = torch.nn.Parameter(bias_, requires_grad=bias_.requires_grad)
             except:
                 print('WARNING: smart bias initialization failure.')
+        elif mdef['type'] == 'yolo-face':
+            yolo_index += 1
+            stride = [32, 16, 8]  # P5, P4, P3 strides
+            if any(x in cfg for x in ['panet', 'yolov4', 'cd53']):  # stride order reversed
+                if not 'yolov4-tiny' in cfg:
+                    stride = list(reversed(stride))
+            layers = mdef['from'] if 'from' in mdef else []
+            modules = YOLO_FaceLayer(anchors=mdef['anchors'][mdef['mask']],  # anchor list
+                                     nd=mdef['descriptor_size'],  # descriptor size
+                                     img_size=img_size,  # (416, 416)
+                                     yolo_index=yolo_index,  # 0, 1, 2...
+                                     layers=layers,  # output layers
+                                     stride=stride[yolo_index])
 
+            # Initialize preceding Conv2d() bias (https://arxiv.org/pdf/1708.02002.pdf section 3.3)
+            try:
+                with torch.no_grad():
+                    j = layers[yolo_index] if 'from' in mdef else -1
+                    bias_ = module_list[j][0].bias  # shape(255,)
+                    bias = bias_[:modules.no * modules.na].view(modules.na, -1)  # shape(3,85)
+                    bias[:, 4] = bias[:, 4] - 4.5  # obj
+                    bias[:, 5:] = bias[:, 5:] + math.log(0.6 / (modules.nc - 0.99))  # cls (sigmoid(p) = 1/nc)
+                    module_list[j][0].bias = torch.nn.Parameter(bias_, requires_grad=bias_.requires_grad)
+            except:
+                print('WARNING: smart bias initialization failure.')
         else:
             print('Warning: Unrecognized Layer Type: ' + mdef['type'])
 
@@ -403,6 +428,55 @@ class YOLOLayer(nn.Module):
             torch.sigmoid_(io[..., 4:])
             return io.view(bs, -1, self.no), p  # view [1, 3, 13, 13, 85] as [1, 507, 85]
 
+class YOLO_FaceLayer(nn.Module):
+    def __init__(self, anchors, nd, img_size, yolo_index, layers, stride):
+        super(YOLO_FaceLayer, self).__init__()
+        self.anchors = torch.Tensor(anchors)
+        self.index = yolo_index  # index of this layer in layers
+        self.layers = layers  # model output layer indices
+        self.stride = stride  # layer stride
+        self.nl = len(layers)  # number of output layers (3)
+        self.na = len(anchors)  # number of anchors (3)
+        self.nd = nd  # size of face descriptor vector (128)
+        self.no = nd + 5  # number of outputs (133)
+        self.nx, self.ny, self.ng = 0, 0, 0  # initialize number of x, y gridpoints
+        self.anchor_vec = self.anchors / self.stride
+        self.anchor_wh = self.anchor_vec.view(1, self.na, 1, 1, 2)
+
+        if ONNX_EXPORT:
+            self.training = False
+            self.create_grids((img_size[1] // stride, img_size[0] // stride))  # number x, y grid points
+
+    def create_grids(self, ng=(13, 13), device='cpu'):
+        self.nx, self.ny = ng  # x and y grid size
+        self.ng = torch.tensor(ng, dtype=torch.float)
+
+        # build xy offsets
+        if not self.training:
+            yv, xv = torch.meshgrid([torch.arange(self.ny, device=device), torch.arange(self.nx, device=device)])
+            self.grid = torch.stack((xv, yv), 2).view((1, 1, self.ny, self.nx, 2)).float()
+
+        if self.anchor_vec.device != device:
+            self.anchor_vec = self.anchor_vec.to(device)
+            self.anchor_wh = self.anchor_wh.to(device)
+
+    def forward(self, p, out):
+        bs, _, ny, nx = p.shape  # bs, 255, 13, 13
+        # if (self.nx, self.ny) != (nx, ny):
+        self.create_grids((nx, ny), p.device)
+
+        # p.view(bs, 399, 13, 13) -- > (bs, 3, 13, 13, 133)  # (bs, anchors, grid, grid, pxywh+descriptor)
+        p = p.view(bs, self.na, self.no, self.ny, self.nx).permute(0, 1, 3, 4, 2).contiguous()  # prediction
+
+        if self.training:
+            return p
+
+        io = p.clone()  # inference output
+        io[..., :2] = torch.sigmoid(io[..., :2]) + self.grid  # xy
+        io[..., 2:4] = torch.exp(io[..., 2:4]) * self.anchor_wh  # wh yolo method
+        io[..., :4] *= self.stride
+        torch.sigmoid_(io[..., 4:])
+        return io.view(bs, -1, self.no), p  # view [1, 3, 13, 13, 133] as [1, 507, 133]
 
 class Darknet(nn.Module):
     # YOLOv3 object detection model
@@ -489,11 +563,12 @@ class Darknet(nn.Module):
                     sh = [list(x.shape)] + [list(out[i].shape) for i in module.layers]  # shapes
                     str = ' >> ' + ' + '.join(['layer %g %s' % x for x in zip(l, sh)])
                 x = module(x, out)  # Shortcut(), FeatureConcat()
-            elif name == 'YOLOLayer':
+            elif name == 'YOLOLayer' or name == 'YOLO_FaceLayer':
                 yolo_out.append(module(x, out))
             else:  # run module directly, i.e. mtype = 'convolutional', 'upsample', 'maxpool', 'batchnorm2d' etc.
                 x = module(x)
-                if name == "Sequential" and self.module_list[i + 1].__class__.__name__ != 'YOLOLayer':
+                if name == "Sequential" and self.module_list[i + 1].__class__.__name__ != 'YOLOLayer' \
+                                        and self.module_list[i + 1].__class__.__name__ != 'YOLO_FaceLayer':
                     feature_out.append(x)
 
             out.append(x if self.routs[i] else [])
@@ -614,7 +689,8 @@ class Darknet(nn.Module):
 
 
 def get_yolo_layers(model):
-    return [i for i, m in enumerate(model.module_list) if m.__class__.__name__ == 'YOLOLayer']  # [89, 101, 113]
+    return [i for i, m in enumerate(model.module_list) 
+            if m.__class__.__name__ == 'YOLOLayer' or m.__class__.__name__ == 'YOLO_FaceLayer']  # [89, 101, 113]
 
 
 def load_darknet_weights(self, weights, cutoff=-1, pt=False, FPGA=False):

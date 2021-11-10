@@ -28,7 +28,7 @@ from intuitus_converter.q_torch.datasets import *
 from torch_yolo.models import *
 from torch_yolo.utils.prune_utils import *
 
-TEST_MODULE_PATH = pathlib.Path(__file__).absolute().parent / 'test_torch_yolo.py'
+TEST_MODULE_PATH = pathlib.Path(__file__).absolute().parent / 'test_face_detection.py'
 spec = importlib.util.spec_from_file_location(TEST_MODULE_PATH.stem,TEST_MODULE_PATH)
 test_py = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(test_py)
@@ -42,8 +42,8 @@ DEVICE = 'cuda:0'
 
 # Hyperparameters
 hyp = {'giou': 1.0,  # giou loss gain
-       'cls': 37.4,  # cls loss gain
-       'cls_pw': 1.0,  # cls BCELoss positive_weight
+       'desc': 0.01,  # cls loss gain
+       'desc_pw': 1.0,  # descriptor BCELoss positive_weight
        'obj': 64.3,  # obj loss gain (*=img_size/320 if img_size != 320)
        'obj_pw': 1.0,  # obj BCELoss positive_weight
        'iou_t': 0.20,  # iou training threshold
@@ -64,12 +64,12 @@ def _create_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument('--epochs', type=int, default=10)  # 500200 batches at bs 16, 117263 COCO images = 273 epochs
     parser.add_argument('--batch-size', type=int, default=4)  # effective bs = batch_size * accumulate = 16 * 4 = 64
-    parser.add_argument('--cfg', type=str, default='torch_yolo/cfg/yolov3tiny-face/yolov3-tiny.cfg', help='*.cfg path')
+    parser.add_argument('--cfg', type=str, default='torch_yolo/cfg/yolov3tiny-face-desc/yolov3-tiny.cfg', help='*.cfg path')
     parser.add_argument('--t_cfg', type=str, default=None, help='teacher model cfg file path for knowledge distillation')
     parser.add_argument('--wdir', type=str, default='./weights', help='weight directory')
     parser.add_argument('--weights', type=str, default=None, help='initial weights path')
     parser.add_argument('--t_weights', type=str, default=None, help='teacher model weights')    
-    parser.add_argument('--data', type=str, default='torch_yolo/data/vggface.data', help='*.data path') # _val_split
+    parser.add_argument('--data', type=str, default='torch_yolo/data/vggface-desc.data', help='*.data path') # _val_split
     parser.add_argument('--multi-scale', action='store_true', help='adjust (67%% - 150%%) img_size every 10 batches')
     parser.add_argument('--img-size', nargs='+', type=int, default=[416, 416], help='[min_train, max-train, test]')
     parser.add_argument('--rect', action='store_true', help='rectangular training')
@@ -87,6 +87,8 @@ def _create_parser():
     parser.add_argument('--single-cls', action='store_true', help='train as single-class dataset')
     parser.add_argument('--mixedprecision', '-mpt', dest='mpt', action='store_true',
                         help='use mixed precision training')
+    parser.add_argument('--pretrain', '-pt', dest='pt', action='store_true',
+                        help='use pretrain model')
     parser.add_argument('--s', type=float, default=0.001, help='scale sparse rate')
     parser.add_argument('--prune', type=int, default=-1,
                         help='0:nomal prune or regular prune 1:shortcut prune 2:layer prune')
@@ -95,7 +97,7 @@ def _create_parser():
     parser.add_argument('--w_bit', type=int, default=6,help='w-bit')
     parser.add_argument('--FPGA', type=bool, default=False)
     parser.add_argument('--test_img_outpath', type=str, default=None, help='Path to output images. If set to None images are not saved.') #'./detect_imgs'
-    parser.add_argument('--load_model', type=str, default=None, help='load saved model instead of weights') 
+    parser.add_argument('--load_model', type=str, default='pt_models/09-11-2021_17-57-27.pt', help='load saved model instead of weights') 
     parser.add_argument('--load_teacher_model', type=str, default=None, help='load saved model instead of weights for teacher')
     parser.add_argument('--skip_weights_of_layers', type=list, default=[15,22], help='list of layers which should not use pretrained weights')
 
@@ -155,7 +157,7 @@ def train(hyp,opt):
     train_path = data_dict['train']
     test_path = data_dict['valid']
     nc = 1 if opt.single_cls else int(data_dict['classes'])  # number of classes
-    hyp['cls'] *= nc / 80  # update coco-tuned hyp['cls'] to current dataset
+    #hyp['cls'] *= nc / 80  # update coco-tuned hyp['cls'] to current dataset
 
     # Remove previous results
     for f in glob.glob('*_batch*.jpg') + glob.glob(results_file):
@@ -279,18 +281,16 @@ def train(hyp,opt):
     # https://discuss.pytorch.org/t/a-problem-occured-when-resuming-an-optimizer/28822
 
     # Dataset
-    dataset = LoadImagesAndLabels2(train_path, img_size, batch_size,
-                                  augment=True,
-                                  hyp=hyp,  # augmentation hyperparameters
-                                  #rect=opt.rect,  # rectangular training
-                                  cache_images=opt.cache_images,
-                                  single_cls=opt.single_cls)
+    dataset = LoadImagesAndLabels_FaceDescriptor(train_path, img_size, batch_size,
+                                                 augment=True,
+                                                 hyp=hyp,  # augmentation hyperparameters
+                                                 cache_images=opt.cache_images,
+                                                 single_cls=opt.single_cls)
 
-    testset = LoadImagesAndLabels2(test_path, imgsz_test, batch_size,
-                                  hyp=hyp,
-                                  #rect=True,
-                                  cache_images=opt.cache_images,
-                                  single_cls=opt.single_cls)
+    testset = LoadImagesAndLabels_FaceDescriptor(test_path, imgsz_test, batch_size,
+                                                 hyp=hyp,
+                                                 cache_images=opt.cache_images,
+                                                 single_cls=opt.single_cls)
 
     # Get the layer to be pruned
     if hasattr(model, 'module'):
@@ -323,13 +323,13 @@ def train(hyp,opt):
     nw = min([os.cpu_count(), batch_size if batch_size > 1 else 0, 8])  # number of workers
     dataloader = torch.utils.data.DataLoader(dataset,
                                             batch_size=batch_size,
-                                            num_workers=nw,
+                                            num_workers=1,
                                             pin_memory=True,
                                             collate_fn=dataset.collate_fn)    
     # Testloader
     testloader = torch.utils.data.DataLoader(testset,
                                             batch_size=batch_size,
-                                            num_workers=nw,
+                                            num_workers=1,
                                             pin_memory=True,
                                             collate_fn=dataset.collate_fn)  
                     
@@ -345,7 +345,7 @@ def train(hyp,opt):
     model.nc = nc  # attach number of classes to model
     model.hyp = hyp  # attach hyperparameters to model
     model.gr = 1.0  # giou loss ratio (obj_loss = 1.0 or giou)
-    model.class_weights = labels_to_class_weights(dataset.labels, nc).to(device)  # attach class weights
+    #model.class_weights = labels_to_class_weights(dataset.labels, nc).to(device)  # attach class weights
 
     # Model EMA
     if opt.ema:
@@ -381,10 +381,10 @@ def train(hyp,opt):
         else:
             sr_flag = True
         # Update image weights (optional)
-        if dataset.image_weights:
-            w = model.class_weights.cpu().numpy() * (1 - maps) ** 2  # class weights
-            image_weights = labels_to_image_weights(dataset.labels, nc=nc, class_weights=w)
-            dataset.indices = random.choices(range(dataset.n), weights=image_weights, k=dataset.n)  # rand weighted idx
+#        if dataset.image_weights:
+#            w = model.class_weights.cpu().numpy() * (1 - maps) ** 2  # class weights
+#            image_weights = labels_to_image_weights(dataset.labels, nc=nc, class_weights=w)
+#            dataset.indices = random.choices(range(dataset.n), weights=image_weights, k=dataset.n)  # rand weighted idx
         mloss = torch.zeros(4).to(device)  # mean losses
         # if opt.local_rank == -1 or opt.local_rank == 0:
         #     print(('\n' + '%10s' * 8) % ('Epoch', 'gpu_mem', 'GIoU', 'obj', 'cls', 'total', 'targets', 'img_size'))
@@ -408,75 +408,17 @@ def train(hyp,opt):
                     if 'momentum' in x:
                         x['momentum'] = np.interp(ni, xi, [0.9, hyp['momentum']])
 
-            # Multi-Scale
-            if opt.multi_scale:
-                if ni / accumulate % 1 == 0:  #  adjust img_size (67% - 150%) every 1 batch
-                    img_size = random.randrange(grid_min, grid_max + 1) * gs
-                sf = img_size / max(imgs.shape[2:])  # scale factor
-                if sf != 1:
-                    ns = [math.ceil(x * sf / gs) * gs for x in imgs.shape[2:]]  # new shape (stretched to 32-multiple)
-                    imgs = F.interpolate(imgs, size=ns, mode='bilinear', align_corners=False)
-
             # Forward
-            if opt.mpt:
-                with amp.autocast(enabled=cuda):
-                    targets = targets.to(device)
-                    pred, feature_s = model(imgs)
+            targets = targets.to(device)
+            pred, feature_s = model(imgs)
+            if i == 29:
+                print("30")
+            # Loss
+            loss, loss_items = compute_loss_face_desc(pred, targets, model)
+            if not torch.isfinite(loss):
+                print('WARNING: non-finite loss, ending training ', loss_items)
+                return results
 
-                    # Loss
-                    loss, loss_items = compute_loss(pred, targets, model)
-                    if not torch.isfinite(loss):
-                        print('WARNING: non-finite loss, ending training ', loss_items)
-                        return results
-
-                    soft_target = 0
-                    if t_cfg:
-                        _, output_t, feature_t = t_model(imgs)
-                        if opt.KDstr == 1:
-                            soft_target = compute_lost_KD(pred, output_t, model.nc, imgs.size(0))
-                        elif opt.KDstr == 2:
-                            soft_target, reg_ratio = compute_lost_KD2(model, targets, pred, output_t)
-                        elif opt.KDstr == 3:
-                            soft_target = compute_lost_KD3(model, targets, pred, output_t)
-                        elif opt.KDstr == 4:
-                            soft_target = compute_lost_KD4(model, targets, pred, output_t, feature_s, feature_t,
-                                                           imgs.size(0))
-                        elif opt.KDstr == 5:
-                            soft_target = compute_lost_KD5(model, targets, pred, output_t, feature_s, feature_t,
-                                                           imgs.size(0),
-                                                           img_size)
-                        else:
-                            print("please select KD strategy!")
-                        loss += soft_target
-            else:
-                targets = targets.to(device)
-                pred, feature_s = model(imgs)
-
-                # Loss
-                loss, loss_items = compute_loss(pred, targets, model)
-                if not torch.isfinite(loss):
-                    print('WARNING: non-finite loss, ending training ', loss_items)
-                    return results
-
-                soft_target = 0
-                if t_cfg:
-                    _, output_t, feature_t = t_model(imgs)
-                    if opt.KDstr == 1:
-                        soft_target = compute_lost_KD(pred, output_t, model.nc, imgs.size(0))
-                    elif opt.KDstr == 2:
-                        soft_target, reg_ratio = compute_lost_KD2(model, targets, pred, output_t)
-                    elif opt.KDstr == 3:
-                        soft_target = compute_lost_KD3(model, targets, pred, output_t)
-                    elif opt.KDstr == 4:
-                        soft_target = compute_lost_KD4(model, targets, pred, output_t, feature_s, feature_t,
-                                                       imgs.size(0))
-                    elif opt.KDstr == 5:
-                        soft_target = compute_lost_KD5(model, targets, pred, output_t, feature_s, feature_t,
-                                                       imgs.size(0),
-                                                       img_size)
-                    else:
-                        print("please select KD strategy!")
-                    loss += soft_target
             # Backward
             loss *= batch_size / 64  # scale loss
             if opt.mpt:

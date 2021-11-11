@@ -441,13 +441,13 @@ def compute_loss_face_desc(p, targets, model):  # predictions, targets, model
     red = 'mean'  # Loss reduction (sum or mean)
 
     # Define criteria
-    BCEdesc = nn.BCEWithLogitsLoss(pos_weight=ft([h['desc_pw']]), reduction=red)
+    LossDesc = nn.HingeEmbeddingLoss()
     BCEobj = nn.BCEWithLogitsLoss(pos_weight=ft([h['obj_pw']]), reduction=red)
 
     # focal loss
     g = h['fl_gamma']  # focal loss gamma
     if g > 0:
-        BCEdesc, BCEobj = FocalLoss(BCEdesc, g), FocalLoss(BCEobj, g)
+        BCEobj = FocalLoss(BCEobj, g)
 
     # Compute losses
     np, ng = 0, 0  # number grid points, targets
@@ -472,7 +472,8 @@ def compute_loss_face_desc(p, targets, model):  # predictions, targets, model
             
             tobj[b, a, gj, gi] = (1.0 - model.gr) + model.gr * giou.detach().clamp(0).type(tobj.dtype)  # giou ratio
 
-            ldesc += BCEdesc(ps[:, 5:],  tdesc[i])  # BCE
+            ldesc += LossDesc(ps[:, 5:],  tdesc[i]) # HingeEmbeddingLoss
+            #ldesc += torch.norm(ps[:, 5:]-tdesc[i]) 
 
         lobj += BCEobj(pi[..., 4], tobj)  # obj loss
 

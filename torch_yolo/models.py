@@ -474,8 +474,8 @@ class YOLO_FaceLayer(nn.Module):
         io = p.clone()  # inference output
         io[..., :2] = torch.sigmoid(io[..., :2]) + self.grid  # xy
         io[..., 2:4] = torch.exp(io[..., 2:4]) * self.anchor_wh  # wh yolo method
-        io[..., :4] *= self.stride
-        torch.sigmoid_(io[..., 4:])
+        io[..., 4] *= self.stride
+        torch.sigmoid_(io[..., 4])
         return io.view(bs, -1, self.no), p  # view [1, 3, 13, 13, 133] as [1, 507, 133]
 
 class Darknet(nn.Module):

@@ -441,7 +441,7 @@ def compute_loss_face_desc(p, targets, model):  # predictions, targets, model
     red = 'mean'  # Loss reduction (sum or mean)
 
     # Define criteria
-    LossDesc = nn.HingeEmbeddingLoss()
+    LossDesc = nn.MSELoss()
     BCEobj = nn.BCEWithLogitsLoss(pos_weight=ft([h['obj_pw']]), reduction=red)
 
     # focal loss
@@ -472,7 +472,8 @@ def compute_loss_face_desc(p, targets, model):  # predictions, targets, model
             
             tobj[b, a, gj, gi] = (1.0 - model.gr) + model.gr * giou.detach().clamp(0).type(tobj.dtype)  # giou ratio
 
-            ldesc += LossDesc(ps[:, 5:],  tdesc[i]) # HingeEmbeddingLoss
+            desc = torch.tanh(ps[:,5:])
+            ldesc += LossDesc(desc,  tdesc[i])
             #ldesc += torch.norm(ps[:, 5:]-tdesc[i]) 
 
         lobj += BCEobj(pi[..., 4], tobj)  # obj loss

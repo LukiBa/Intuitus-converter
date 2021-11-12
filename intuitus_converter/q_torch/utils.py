@@ -441,7 +441,7 @@ def compute_loss_face_desc(p, targets, model):  # predictions, targets, model
     red = 'mean'  # Loss reduction (sum or mean)
 
     # Define criteria
-    BCEdesc = nn.BCEWithLogitsLoss(pos_weight=ft([h['desc_pw']]), reduction=red)
+    #BCEdesc = nn.BCELoss(reduction=red)
     BCEobj = nn.BCEWithLogitsLoss(pos_weight=ft([h['obj_pw']]), reduction=red)
 
     # focal loss
@@ -472,7 +472,9 @@ def compute_loss_face_desc(p, targets, model):  # predictions, targets, model
             
             tobj[b, a, gj, gi] = (1.0 - model.gr) + model.gr * giou.detach().clamp(0).type(tobj.dtype)  # giou ratio
 
-            ldesc += BCEdesc(ps[:, 5:],  tdesc[i])  # BCE
+            desc = torch.tanh_(ps[:, 5:])
+            ldesc += torch.norm(desc-tdesc[i])
+            #ldesc += BCEdesc(desc,  tdesc[i])  # BCE
 
         lobj += BCEobj(pi[..., 4], tobj)  # obj loss
 
